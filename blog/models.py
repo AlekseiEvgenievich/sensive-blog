@@ -1,9 +1,48 @@
 from django.db import models
 from django.urls import reverse
 from django.contrib.auth.models import User
+from django.db.models import Count
+
+
+class PostQuerySet(models.QuerySet):
+    def popular(self):
+        """
+        Аннотирует посты количеством лайков и возвращает ID самых популярных постов.
+        """
+        return self.annotate(likes_count=Count('likes')).order_by('-likes_count')
+
+    def fetch_with_comments_count(self):
+        """
+        Для уже отфильтрованного QuerySet (например, самых популярных постов)
+        аннотирует каждый пост количеством комментариев.
+        """
+        if not self.exists():
+            return []
+
+        post_ids = [post.id for post in self]
+
+        comments_counts = Post.objects.filter(id__in=post_ids).annotate(
+            comments_count=Count('comments')).values_list('id', 'comments_count')
+        comments_count_dict = dict(comments_counts)
+
+        updated_posts = []
+        for post in self:
+            post.comments_count = comments_count_dict.get(post.id, 0)
+            updated_posts.append(post)
+
+        return updated_posts
+
+
+class TagQuerySet(models.QuerySet):
+
+    def popular(self):
+        popular_tags = self.annotate(
+            posts_count=Count('posts')).order_by('-posts_count')
+        return popular_tags
 
 
 class Post(models.Model):
+    objects = PostQuerySet.as_manager()
     title = models.CharField('Заголовок', max_length=200)
     text = models.TextField('Текст')
     slug = models.SlugField('Название в виде url', max_length=200)
@@ -38,6 +77,7 @@ class Post(models.Model):
 
 
 class Tag(models.Model):
+    objects = TagQuerySet.as_manager()
     title = models.CharField('Тег', max_length=20, unique=True)
 
     def __str__(self):
@@ -58,6 +98,7 @@ class Tag(models.Model):
 class Comment(models.Model):
     post = models.ForeignKey(
         'Post',
+        related_name='comments',
         on_delete=models.CASCADE,
         verbose_name='Пост, к которому написан')
     author = models.ForeignKey(
